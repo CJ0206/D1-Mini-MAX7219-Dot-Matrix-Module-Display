@@ -25,7 +25,7 @@ You will need the following components:
 *   **2 x MAX7219 Dot Matrix Module 32x8 (4-in-1):**
     *   Can be purchased here: [MAX7219 Dot Matrix Module](https://www.aliexpress.com/item/1005008005112441.html)
 *   Connecting wires.
-*   A 5V power supply capable of providing at least 2A (recommended).
+*   A 5V power supply (if you use the same board linked above a standard USB port should work).
 
 ## Wiring Instructions
 
