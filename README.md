@@ -2,6 +2,8 @@
 
 This project creates a versatile WiFi-enabled clock and message display using a WEMOS D1 Mini and two 32x8 (cascaded 4x 8x8) MAX7219 dot matrix modules.
 
+![GPIO Pin Out](D1%20Mini%20-%20MAX7219%20Dot%20Matrix%20Module%20Display.png)
+
 ## Features
 
 *   Displays Time (12/24h format, with optional seconds), Day of the week, and Date.
