@@ -45,6 +45,40 @@ The MAX7219 modules need to be connected to the D1 Mini. The modules are daisy-c
 
 Connect the `DOUT`, `CS`, `CLK`, `VCC`, and `GND` pins on the output side of the first module to the corresponding input pins (`DIN`, `CS`, `CLK`, `VCC`, `GND`) of the second module.
 
+
+## Display Hardware Configuration
+
+The MAX7219 Dot Matrix modules come from various manufacturers and may have different internal wiring. To support this, the `MD_MAX72xx` library provides a `HARDWARE_TYPE` setting in the `RTC.ino` file.
+
+### Choosing a `HARDWARE_TYPE`
+
+In `RTC.ino`, you will find this line:
+```c++
+#define HARDWARE_TYPE MD_MAX72XX::DR1CR0RR1_HW
+```
+
+If your display appears scrambled or does not work correctly, you may need to change this value. The most common types for modules found on Amazon, AliExpress, etc., are:
+
+*   `FC16_HW`: For modules with "FC-16" printed on the circuit board.
+*   `GENERIC_HW`: For many other common modules.
+
+**It is recommended to try `FC16_HW` first.** If that does not work, try `GENERIC_HW`.
+
+Additional configurations can be found in the [library documentation](https://majicdesigns.github.io/MD_MAX72XX/page_hardware.html).
+
+### Correcting Mirrored or Flipped Displays
+
+After selecting the correct `HARDWARE_TYPE`, your display may still appear mirrored (backwards). This can be corrected in software.
+
+In the `setup()` function of `RTC.ino`, you will find this line:
+```c++
+myDisplay.setZoneEffect(0, true, PA_FLIP_LR);
+```
+This line flips the display horizontally (`LR` = Left-Right).
+
+*   If your text is mirrored, **keep this line**.
+*   If your text is not mirrored, you can **remove or comment out this line** to prevent it from being flipped.
+
 ## Software & Programming
 
 You will use the Arduino IDE to program the D1 Mini.
