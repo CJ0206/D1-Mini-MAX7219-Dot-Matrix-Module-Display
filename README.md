@@ -1,4 +1,4 @@
-# D1 Mini - MAX7219 Dot Matrix Module Display
+# D1 Mini - MAX7219 Dot Matrix Module Display <a href='https://ko-fi.com/christianjameswatkins' target='_blank'><img height='35' align='right' style='border:0px;height:46px;' src='https://storage.ko-fi.com/cdn/kofi1.png?v1' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a>
 
 This project creates a versatile WiFi-enabled clock and message display using a WEMOS D1 Mini and two 32x8 (cascaded 4x 8x8) MAX7219 dot matrix modules.
 
