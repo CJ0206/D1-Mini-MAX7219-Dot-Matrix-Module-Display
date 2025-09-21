@@ -420,7 +420,7 @@ void statemachine() {
   // State machine
   switch (g_displaySm) {
     case DisplayState::FADE_IN:
-      if (strlen(feed[g_dispTextIdx].c_str()) > 10) {
+      if (strlen(feed[g_dispTextIdx].c_str()) > 11) {
         myDisplay.setIntensity(g_displaySettings.max_brightness);
         myDisplay.displayScroll(feed[g_dispTextIdx].c_str(), PA_CENTER, PA_SCROLL_RIGHT, LocalGetScrollSpeedMs(g_displaySettings.scroll_speed));
         g_displaySm = DisplayState::SCROLLING;
