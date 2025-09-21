@@ -9,6 +9,7 @@ This project creates a versatile WiFi-enabled clock and message display using a 
 *   Displays Time (12/24h format, with optional seconds), Day of the week, and Date.
 *   Shows a custom user-defined message.
 *   Features a countdown timer to a specific date and time.
+*   Features a count-up timer with start/stop/reset.
 *   Built-in Web Interface for configuration:
     *   Initial setup via WiFi Access Point mode.
     *   Connects to your local WiFi network.
@@ -136,4 +137,6 @@ For most changes, you do not need to reprogram the device. Simply navigate to th
 *   Change display durations and animation speeds.
 *   Set a custom message.
 *   Configure the countdown timer.
+*   Control the count-up timer.
 *   Adjust the display brightness.
+*   Adjust the fade time between functions (does not work on lower brightness settings).
