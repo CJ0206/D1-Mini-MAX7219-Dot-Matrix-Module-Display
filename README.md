@@ -2,7 +2,7 @@
 
 This project creates a versatile WiFi-enabled clock and message display using a WEMOS D1 Mini and two 32x8 (cascaded 4x 8x8) MAX7219 dot matrix modules.
 
-![GPIO Pin Out](D1%20Mini%20-%20MAX7219%20Dot%20Matrix%20Module%20Display.png)
+![D1 Mini - MAX7219 Dot Matrix Module Display](D1%20Mini%20-%20MAX7219%20Dot%20Matrix%20Module%20Display.png)
 
 ## Features
 
@@ -120,6 +120,8 @@ On its first boot (or after a factory reset), the display will start in Access P
 4.  The display will reboot and connect to your network. If the display is configured to show it, it will scroll its new IP address.
 5.  You can now access the settings page by navigating to that IP address in your browser from any device on the same network.
 
+<img src="Home%20Page.png" alt="Home Page" width="400">
+
 ## Customization
 
 ### Changing Default Behavior (Firmware)
@@ -140,3 +142,5 @@ For most changes, you do not need to reprogram the device. Simply navigate to th
 *   Control the count-up timer.
 *   Adjust the display brightness.
 *   Adjust the fade time between functions (does not work on lower brightness settings).
+
+<img src="Settings%20Page.png" alt="Settings Page" width="400">
