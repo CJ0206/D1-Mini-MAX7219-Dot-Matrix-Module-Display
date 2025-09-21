@@ -57,6 +57,7 @@ struct DisplaySettings {
    * bit 4: display custom_message
    * bit 5: display seconds
    * bit 6: display countdown
+   * bit 7: display countup
    */
   uint8_t flags;
   uint16_t duration_time;
@@ -64,6 +65,7 @@ struct DisplaySettings {
   uint16_t duration_date;
   uint16_t duration_custom_message;
   uint16_t duration_countdown;
+  uint16_t duration_countup;
   uint16_t fade_time;
   uint8_t scroll_speed;
   uint8_t max_brightness;
@@ -76,6 +78,11 @@ DisplaySettings g_displaySettings;
 
 MD_Parola myDisplay = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 //
+
+// Count-up timer variables
+unsigned long g_countup_start_time = 0;
+unsigned long g_countup_elapsed_time = 0;
+boolean g_countup_running = false;
 
 const int timeDelay = 3000; // Delay between Time / Day / Subs / Views
 int statusCode;
@@ -98,7 +105,8 @@ enum class Values : uint8_t {
   curDate = 2,
   customMessage = 3,
   countdown = 4,
-  count = 5
+  countUp = 5,
+  count = 6
 };
 
 typedef enum {
@@ -119,6 +127,7 @@ boolean g_dispState[] = {
   /* Date */      false,
   /* Msg */       false,
   /* Countdown */ false,
+  /* CountUp */   false,
 };
 
 static int g_dispTextIdx = 0;
@@ -182,6 +191,10 @@ void handleSaveSettings( void );
 void initializeDefaultDisplaySettings( void );
 void handleConfirmResetPage( void );
 void handleFactoryReset( void );
+void handleStartTimer( void );
+void handleStopTimer( void );
+void handleResetTimer( void );
+void handleGetTimer( void );
 
 
 int LocalGetScrollSpeedMs(uint8_t type)
@@ -315,6 +328,7 @@ void setup() {
     g_dispState[(uint8_t)Values::curDate] = (g_displaySettings.flags & (1 << 2)) != 0;
     g_dispState[(uint8_t)Values::customMessage] = (g_displaySettings.flags & (1 << 4)) != 0;
     g_dispState[(uint8_t)Values::countdown] = (g_displaySettings.flags & (1 << 6)) != 0;
+    g_dispState[(uint8_t)Values::countUp] = (g_displaySettings.flags & (1 << 7)) != 0;
 
     // Validate WiFi credentials if in station mode.
     if (g_runningMode == RUNNING_MODE_WIFI_STATION && (String(ssid).length() == 0 || String(password).length() < 8) )
@@ -334,6 +348,10 @@ void setup() {
   apserver.on( "/save-settings", handleSaveSettings );
   apserver.on( "/confirm-reset", handleConfirmResetPage );
   apserver.on( "/factory-reset", handleFactoryReset );
+  apserver.on( "/start-timer", handleStartTimer );
+  apserver.on( "/stop-timer", handleStopTimer );
+  apserver.on( "/reset-timer", handleResetTimer );
+  apserver.on( "/get-timer", handleGetTimer );
   apserver.onNotFound( handleNotFound );
 
   if (g_runningMode == RUNNING_MODE_WIFI_AP)
@@ -402,7 +420,7 @@ void statemachine() {
   // State machine
   switch (g_displaySm) {
     case DisplayState::FADE_IN:
-      if ((g_dispTextIdx == (uint8_t)Values::customMessage || g_dispTextIdx == (uint8_t)Values::countdown) && strlen(feed[g_dispTextIdx].c_str()) > 10) {
+      if (strlen(feed[g_dispTextIdx].c_str()) > 10) {
         myDisplay.setIntensity(g_displaySettings.max_brightness);
         myDisplay.displayScroll(feed[g_dispTextIdx].c_str(), PA_CENTER, PA_SCROLL_RIGHT, LocalGetScrollSpeedMs(g_displaySettings.scroll_speed));
         g_displaySm = DisplayState::SCROLLING;
@@ -422,7 +440,7 @@ void statemachine() {
 
     case DisplayState::SHOWING:
     {
-      if (g_dispTextIdx == (uint8_t)Values::curTime || g_dispTextIdx == (uint8_t)Values::countdown) {
+      if (g_dispTextIdx == (uint8_t)Values::curTime || g_dispTextIdx == (uint8_t)Values::countdown || g_dispTextIdx == (uint8_t)Values::countUp) {
         myDisplay.print(feed[g_dispTextIdx]);
       }
       uint16_t display_time = 0;
@@ -433,6 +451,7 @@ void statemachine() {
         case (uint8_t)Values::curDate: display_time = g_displaySettings.duration_date; break;
         case (uint8_t)Values::customMessage: display_time = g_displaySettings.duration_custom_message; break;
         case (uint8_t)Values::countdown: display_time = g_displaySettings.duration_countdown; break;
+        case (uint8_t)Values::countUp: display_time = g_displaySettings.duration_countup; break;
       }
       if (millis() - g_lastChangeTime > display_time) {
         g_displaySm = DisplayState::FADE_OUT;
@@ -448,7 +467,7 @@ void statemachine() {
       break;
 
     case DisplayState::FADE_OUT:
-      if (g_dispTextIdx != (uint8_t)Values::customMessage || strlen(g_displaySettings.custom_message) <= 10) {
+      if (strlen(feed[g_dispTextIdx].c_str()) <= 10) {
         myDisplay.print(feed[g_dispTextIdx]);
         if (millis() - g_lastChangeTime > (fade_time / FADE_STEPS)) {
           g_fade_intensity--;
@@ -487,6 +506,10 @@ void statemachine() {
 
 void loop() {
   uint32_t currentTime = millis();
+
+  if (g_countup_running) {
+    g_countup_elapsed_time = millis() - g_countup_start_time;
+  }
 
   if ( g_runningMode == RUNNING_MODE_WIFI_STATION )
   {
@@ -549,9 +572,7 @@ void loop() {
       for (int i=0; i < (int)Values::count; i++) { if (g_dispState[i]) { single_mode_idx = i; break; } }
 
       if (single_mode_idx != -1) {
-        bool isCustomMessage = single_mode_idx == (uint8_t)Values::customMessage;
-        bool isCountdown = single_mode_idx == (uint8_t)Values::countdown;
-        bool isLongMessage = (isCustomMessage || isCountdown) && strlen(feed[single_mode_idx].c_str()) > 10;
+        bool isLongMessage = strlen(feed[single_mode_idx].c_str()) > 10;
         
         myDisplay.setIntensity(g_displaySettings.max_brightness);
 
@@ -664,6 +685,18 @@ void configureData() {
   } else {
     feed[(uint8_t)Values::countdown] = "";
   }
+
+  if (g_displaySettings.flags & (1 << 7)) {
+    unsigned long total_seconds = g_countup_elapsed_time / 1000;
+    unsigned long hours = total_seconds / 3600;
+    unsigned long minutes = (total_seconds % 3600) / 60;
+    unsigned long seconds = total_seconds % 60;
+    char time_buffer[10];
+    sprintf(time_buffer, "%02lu:%02lu:%02lu", hours, minutes, seconds);
+    feed[(uint8_t)Values::countUp] = time_buffer;
+  } else {
+    feed[(uint8_t)Values::countUp] = "";
+  }
 }
 
 
@@ -681,7 +714,7 @@ static const char* PROGMEM respTemplate = "HTTP/1.1 200 OK\r\nContent-Type: text
                   "<title>CJs Matrix</title>"
                   "</head>"
                   "<body>{{body}}<script>{{script}}</script></body></html>";
-static const char* PROGMEM respStyle = "body { background-color: #121212; color: #e0e0e0; font-family: Arial, sans-serif; font-size: 110%; margin: 0; padding: 20px; } #main { max-width: 500px; margin: auto; padding: 20px; background-color: #1e1e1e; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); } h2 { text-align: center; color: #ffffff; } .button, .active-btn, .continue-btn, .yes-btn, .no-btn, .reset-btn { padding: 12px 20px; width: 100%; font-size: 120%; cursor: pointer; border-radius: 5px; border: none; color: white; margin-top: 10px; box-sizing: border-box; } .active-btn { background-color: #007bff; } .active-btn:hover { background-color: #0056b3; } .yes-btn { background-color: #28a745; } .yes-btn:hover { background-color: #218838; } .no-btn { background-color: #dc3545; } .no-btn:hover { background-color: #c82333; } .reset-btn { background-color: #dc3545; } .reset-btn:hover { background-color: #c82333; } .continue-btn { background-color: #6c757d; } .continue-btn:hover { background-color: #5a6268; } .main-page-url { font-size: 140%; text-decoration: underline; color: #007bff; } .large-text { font-size: 120%; } .center { padding-top: 0px; width: 100%; display: flex; flex-direction: column; align-items: center; text-align: center; } .center > div { margin: 5px; } .center-container { width: 100%; display: flex; flex-direction: column; align-items: center; } .center-children { width: 100%; } .center-children > form input[type='text'], .center-children > form input[type='password'], .center-children > form input[type='number'], .center-children > form input[type='datetime-local'], .center-children > form textarea, .center-children > form select { padding: 10px; width: 100%; border-radius: 5px; border: 1px solid #444; background-color: #333; color: #e0e0e0; box-sizing: border-box; margin-top: 5px; } .center-children > form .input-label { margin-top: 15px; margin-bottom: 5px; color: #aaa; display: block; } .center-children > form .btn-submit { width: 100%; display: flex; justify-content: center; margin-top: 20px; } .flex-container { display: flex; justify-content: center; margin-bottom: 10px; } .header { margin: 20px 0; } .table-container { width: 100%; border-collapse: collapse; } .table-container tr { border-bottom: 1px solid #444; } .table-container tr:last-child { border-bottom: none; } .table-container td { padding: 10px; } .table-underline { text-decoration: none; color: #007bff; cursor: pointer; } .table-underline:hover { text-decoration: underline; } .wifi-level { width: 20px; height: auto; } a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; } input[type='checkbox'], input[type='radio'] { margin-right: 10px; } label { vertical-align: middle; }";
+static const char* PROGMEM respStyle = "body { background-color: #121212; color: #e0e0e0; font-family: Arial, sans-serif; font-size: 110%; margin: 0; padding: 20px; } #main { max-width: 500px; margin: auto; padding: 20px; background-color: #1e1e1e; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); } h2 { text-align: center; color: #ffffff; } .button, .active-btn, .continue-btn, .yes-btn, .no-btn, .reset-btn { padding: 12px 20px; width: 100%; font-size: 120%; cursor: pointer; border-radius: 5px; border: none; color: white; margin-top: 10px; box-sizing: border-box; } .active-btn { background-color: #007bff; } .active-btn:hover { background-color: #0056b3; } .yes-btn { background-color: #28a745; } .yes-btn:hover { background-color: #218838; } .no-btn { background-color: #dc3545; } .no-btn:hover { background-color: #c82333; } .reset-btn { background-color: #dc3545; } .reset-btn:hover { background-color: #c82333; } .continue-btn { background-color: #6c757d; } .continue-btn:hover { background-color: #5a6268; } .main-page-url { font-size: 140%; text-decoration: underline; color: #007bff; } .large-text { font-size: 120%; } .center { padding-top: 0px; width: 100%; display: flex; flex-direction: column; align-items: center; text-align: center; } .center > div { margin: 5px; } .center-container { width: 100%; display: flex; flex-direction: column; align-items: center; } .center-children { width: 100%; } .center-children > form input[type='text'], .center-children > form input[type='password'], .center-children > form input[type='number'], .center-children > form input[type='datetime-local'], .center-children > form textarea, .center-children > form select { padding: 10px; width: 100%; border-radius: 5px; border: 1px solid #444; background-color: #333; color: #e0e0e0; box-sizing: border-box; margin-top: 5px; } .center-children > form .input-label { margin-top: 15px; margin-bottom: 5px; color: #aaa; display: block; } .center-children > form .btn-submit { width: 100%; display: flex; justify-content: center; margin-top: 20px; } .flex-container { display: flex; justify-content: center; margin-bottom: 10px; } .header { margin: 20px 0; } .table-container { width: 100%; border-collapse: collapse; } .table-container tr { border-bottom: 1px solid #444; } .table-container tr:last-child { border-bottom: none; } .table-container td { padding: 10px; } .table-underline { text-decoration: none; color: #007bff; cursor: pointer; } .table-underline:hover { text-decoration: underline; } .wifi-level { width: 20px; height: auto; } a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; } .switch { position: relative; display: inline-block; width: 50px; height: 28px; } .switch input { opacity: 0; width: 0; height: 0; } .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #dc3545; -webkit-transition: .4s; transition: .4s; border-radius: 28px; } .slider:before { position: absolute; content: ''; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: white; -webkit-transition: .4s; transition: .4s; border-radius: 50%; } input:checked + .slider { background-color: #28a745; } input:checked + .slider:before { -webkit-transform: translateX(22px); -ms-transform: translateX(22px); transform: translateX(22px); } label { vertical-align: middle; } .setting-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; } .module-section { border: 1px solid #444; border-radius: 8px; padding: 15px; margin: 15px 0; } .module-title { font-size: 1.1em; color: #ffffff; margin-bottom: 10px; }";
 
 static const char* PROGMEM webRoot = "<div id='main'> <div class='flex-container'> </div> <h2 class='header'>CJs Matrix</h2> <div class='center'> <div>Welcome to the Matrix Display setup.</div> </div> <div class='center'> <a href='select-network'><input class='button active-btn' type='submit' value='Setup WiFi'></input></a> </div> <div class='center'> <a href='settings'><input class='button active-btn' type='submit' value='Settings' /></a> </div> <div class='center'> <a href='confirm-reset'><input class='button reset-btn' type='submit' value='Factory Reset' /></a> </div></div>";
 
@@ -693,7 +726,7 @@ static const char* PROGMEM webInputPassword = " <div id='main'> <div class='flex
 
 static const char* PROGMEM webWifiConnected = "<div id='main'> <div class='flex-container'>      </div> <h2 class='header'>CJs Matrix</h2> <div class='center'> <div>Your Matrix Display will now reboot and connect to the selected WiFi network.</div> <div>You can adjust settings by navigating to the device's IP address in a browser.</div> </div> <script> </script> </div>";
 
-static const char* PROGMEM webSettingsPage = "<div id='main'> <div class='flex-container'> </div> <h2 class='header'>Display Settings</h2> <div class='center-container'> <div class='center-children'> <form action='save-settings' method='get'> <div class='input-label'>Display Content</div> <div><span class='flex-container' style='display: inline-flex; justify-content: space-between; align-items: center; width: 100%; margin: 0;'><div><input type='checkbox' id='time' name='time' value='1' {{time_checked}}><label for='time'>Time</label></div><div><input type='checkbox' id='show_seconds' name='show_seconds' value='1' {{show_seconds_checked}}><label for='show_seconds'>Seconds</label></div><div><select name='clock_format' id='clock_format' style='width: auto;'><option value='12' {{12hr_selected}}>12 Hour</option><option value='24' {{24hr_selected}}>24 Hour</option></select></div></span></div> <div><input type='checkbox' id='day' name='day' value='1' {{day_checked}}><label for='day'>Day of Week</label></div> <div><input type='checkbox' id='date' name='date' value='1' {{date_checked}}><label for='date'>Date</label></div> <div><input type='checkbox' id='custom_message_cb' name='custom_message_cb' value='1' {{custom_message_checked}}><label for='custom_message_cb'>Custom Message</label></div> <div><input type='checkbox' id='countdown' name='countdown' value='1' {{countdown_checked}}><label for='countdown'>Countdown</label></div> <div class='input-label'>Display Durations (ms)</div> <label for='duration_time'>Time: (min 5000)</label><input type='number' id='duration_time' name='duration_time' value='{{duration_time}}'><br> <label for='duration_day'>Day: (min 5000)</label><input type='number' id='duration_day' name='duration_day' value='{{duration_day}}'><br> <label for='duration_date'>Date: (min 5000)</label><input type='number' id='duration_date' name='duration_date' value='{{duration_date}}'><br> <label for='duration_custom_message'>Custom Message: (min 5000)</label><input type='number' id='duration_custom_message' name='duration_custom_message' value='{{duration_custom_message}}'><br> <label for='duration_countdown'>Countdown: (min 5000)</label><input type='number' id='duration_countdown' name='duration_countdown' value='{{duration_countdown}}'><br> <div class='input-label'>Fade Time (ms)</div> <label for='fade_time'>(min 200)</label><input type='number' id='fade_time' name='fade_time' value='{{fade_time}}'><br> <div class='input-label'>Countdown Target</div><input type='datetime-local' name='countdown_target_dt' value='{{countdown_target_dt}}'><br> <div class='input-label'>Countdown Complete Message</div> <input type='text' id='countdown_complete_message' name='countdown_complete_message' value='{{countdown_complete_message}}' maxlength='64'><br> <div class='input-label'>Predefined Messages</div><select id='predefined_messages' onchange='updateCustomMessage()'><option value=''>-- Select a message --</option><option value='BUSY'>⛔ BUSY</option><option value='ON A CALL'>📞 ON A CALL</option><option value='ON AIR'>🔴 ON AIR</option><option value='FREE'>☕ FREE</option><option value='AWAY'>🚪 AWAY</option><option value='WAIT'>✋🏻 WAIT</option></select><br><div class='input-label'>Custom Message</div> <textarea id='custom_message_text' name='custom_message' rows='3' style='width: 100%'>{{custom_message}}</textarea><br> <div class='input-label'>Scroll Speed</div> <select name='scroll_speed' id='scroll_speed'> <option value='0' {{scroll_slow_selected}}>Slow</option> <option value='1' {{scroll_medium_selected}}>Medium</option> <option value='2' {{scroll_fast_selected}}>Fast</option> </select><br> <div class='input-label'>Max Brightness</div> <input type='range' min='0' max='15' value='{{max_brightness}}' name='max_brightness' /><br> <div class='btn-submit'> <input class='button active-btn' type='submit' value='SAVE SETTINGS' /> </div> </form> </div> </div> </div><script>function updateCustomMessage() { var dropdown = document.getElementById('predefined_messages'); var customMessageText = document.getElementById('custom_message_text'); var selectedValue = dropdown.options[dropdown.selectedIndex].value; if (selectedValue) { customMessageText.value = selectedValue; } }</script>";
+static const char* PROGMEM webSettingsPage = "<div id='main'> <div class='flex-container'> </div> <h2 class='header'>Display Settings</h2> <div class='center-container'> <div class='center-children'> <form action='save-settings' method='get'> <div class='module-section'> <div class='module-title'>Time</div> <div class='setting-row'> <span>Display Time</span> <label class='switch'><input type='checkbox' id='time' name='time' value='1' {{time_checked}}><span class='slider'></span></label> </div> <label for='duration_time'>Duration (ms): (min 5000)</label><input type='number' id='duration_time' name='duration_time' value='{{duration_time}}'><br> <input type='checkbox' id='show_seconds' name='show_seconds' value='1' {{show_seconds_checked}}><label for='show_seconds'>Show Seconds</label><br> <select name='clock_format' id='clock_format'><option value='12' {{12hr_selected}}>12 Hour</option><option value='24' {{24hr_selected}}>24 Hour</option></select> </div> <div class='module-section'> <div class='module-title'>Day of Week</div> <div class='setting-row'> <span>Display Day of Week</span> <label class='switch'><input type='checkbox' id='day' name='day' value='1' {{day_checked}}><span class='slider'></span></label> </div> <label for='duration_day'>Duration (ms): (min 5000)</label><input type='number' id='duration_day' name='duration_day' value='{{duration_day}}'><br> </div> <div class='module-section'> <div class='module-title'>Date</div> <div class='setting-row'> <span>Display Date</span> <label class='switch'><input type='checkbox' id='date' name='date' value='1' {{date_checked}}><span class='slider'></span></label> </div> <label for='duration_date'>Duration (ms): (min 5000)</label><input type='number' id='duration_date' name='duration_date' value='{{duration_date}}'><br> </div> <div class='module-section'> <div class='module-title'>Custom Message</div> <div class='setting-row'> <span>Display Custom Message</span> <label class='switch'><input type='checkbox' id='custom_message_cb' name='custom_message_cb' value='1' {{custom_message_checked}}><span class='slider'></span></label> </div> <label for='duration_custom_message'>Duration (ms): (min 5000)</label><input type='number' id='duration_custom_message' name='duration_custom_message' value='{{duration_custom_message}}'><br> <div class='input-label'>Predefined Messages</div><select id='predefined_messages' onchange='updateCustomMessage()'><option value=''>-- Select a message --</option><option value='BUSY'>⛔ BUSY</option><option value='ON A CALL'>📞 ON A CALL</option><option value='ON AIR'>🔴 ON AIR</option><option value='FREE'>☕ FREE</option><option value='AWAY'>🚪 AWAY</option><option value='WAIT'>✋🏻 WAIT</option></select><br><div class='input-label'>Custom Message</div> <textarea id='custom_message_text' name='custom_message' rows='3' style='width: 100%'>{{custom_message}}</textarea> </div> <div class='module-section'> <div class='module-title'>Countdown</div> <div class='setting-row'> <span>Display Countdown</span> <label class='switch'><input type='checkbox' id='countdown' name='countdown' value='1' {{countdown_checked}}><span class='slider'></span></label> </div> <label for='duration_countdown'>Duration (ms): (min 5000)</label><input type='number' id='duration_countdown' name='duration_countdown' value='{{duration_countdown}}'><br> <div class='input-label'>Countdown Target</div><input type='datetime-local' name='countdown_target_dt' value='{{countdown_target_dt}}'><br> <div class='input-label'>Countdown Complete Message</div> <input type='text' id='countdown_complete_message' name='countdown_complete_message' value='{{countdown_complete_message}}' maxlength='64'> </div> <div class='module-section'> <div class='module-title'>Count-Up Timer</div> <div class='setting-row'> <span>Display Count-Up Timer</span> <label class='switch'><input type='checkbox' id='countup' name='countup' value='1' {{countup_checked}}><span class='slider'></span></label> </div> <label for='duration_countup'>Duration (ms): (min 5000)</label><input type='number' id='duration_countup' name='duration_countup' value='{{duration_countup}}'><br> <div class='flex-container' style='justify-content: space-around; align-items: center; padding: 10px; border: 1px solid #444; border-radius: 5px; margin-top: 10px;'> <span id='countup_timer_display' style='font-size: 1.2em; color: #e0e0e0; font-family: monospace;'>00:00:00.0</span> <button type='button' class='button active-btn' style='width: auto; margin: 0 5px;' onclick='startCountup()'>Start</button> <button type='button' class='button continue-btn' style='width: auto; margin: 0 5px;' onclick='stopCountup()'>Stop</button> <button type='button' class='button reset-btn' style='width: auto; margin: 0 5px;' onclick='resetCountup()'>Reset</button> </div> </div> <div class='module-section'> <div class='module-title'>Display Settings</div> <label for='scroll_speed'>Scroll Speed</label> <select name='scroll_speed' id='scroll_speed'> <option value='0' {{scroll_slow_selected}}>Slow</option> <option value='1' {{scroll_medium_selected}}>Medium</option> <option value='2' {{scroll_fast_selected}}>Fast</option> </select><br> <label for='max_brightness'>Max Brightness</label> <input type='range' min='0' max='15' value='{{max_brightness}}' name='max_brightness' /><br> <label for='fade_time'>Fade Time (ms): (min 200)</label><input type='number' id='fade_time' name='fade_time' value='{{fade_time}}'><br> </div> <div class='btn-submit'> <input class='button active-btn' type='submit' value='SAVE SETTINGS' /> </div> </form> </div> </div> </div><script>function updateCustomMessage() { var dropdown = document.getElementById('predefined_messages'); var customMessageText = document.getElementById('custom_message_text'); var selectedValue = dropdown.options[dropdown.selectedIndex].value; if (selectedValue) { customMessageText.value = selectedValue; } } let countup_timer_interval; const countup_timer_display = document.getElementById('countup_timer_display'); function formatTime(ms) { const total_seconds = Math.floor(ms / 1000); const hours = Math.floor(total_seconds / 3600); const minutes = Math.floor((total_seconds % 3600) / 60); const seconds = total_seconds % 60; const tenths = Math.floor((ms % 1000) / 100); return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${tenths}`; } function startCountup() { fetch('/start-timer'); } function stopCountup() { fetch('/stop-timer'); } function resetCountup() { fetch('/reset-timer'); } function getTimer() { fetch('/get-timer').then(response => response.json()).then(data => { if(countup_timer_display) { countup_timer_display.textContent = formatTime(data.time); } }); } document.addEventListener('DOMContentLoaded', function() { if(document.getElementById('countup_timer_display')) { getTimer(); countup_timer_interval = setInterval(getTimer, 100); } });</script>";
 
 static const char* PROGMEM webConfirmResetPage = "<div id='main'> <div class='flex-container'> </div> <h2 class='header'>Confirm Reset</h2> <div class='center'> <div>Are you sure you want to proceed?</div> <div>This will clear all saved WiFi credentials and settings. This action cannot be undone.</div> </div> <div class='center'> <a href='factory-reset'><input class='button reset-btn' type='submit' value='Confirm Factory Reset'></input></a> </div> <div class='center'> <a href='/'><input class='button continue-btn' type='submit' value='Cancel' /></a> </div></div>";
 
@@ -716,11 +749,13 @@ void handleSettings( void )
   settingsPage.replace("{{date_checked}}", (g_displaySettings.flags & (1 << 2)) ? "checked" : "");
   settingsPage.replace("{{custom_message_checked}}", (g_displaySettings.flags & (1 << 4)) ? "checked" : "");
   settingsPage.replace("{{countdown_checked}}", (g_displaySettings.flags & (1 << 6)) ? "checked" : "");
+  settingsPage.replace("{{countup_checked}}", (g_displaySettings.flags & (1 << 7)) ? "checked" : "");
   settingsPage.replace("{{duration_time}}", String(g_displaySettings.duration_time));
   settingsPage.replace("{{duration_day}}", String(g_displaySettings.duration_day));
   settingsPage.replace("{{duration_date}}", String(g_displaySettings.duration_date));
   settingsPage.replace("{{duration_custom_message}}", String(g_displaySettings.duration_custom_message));
   settingsPage.replace("{{duration_countdown}}", String(g_displaySettings.duration_countdown));
+  settingsPage.replace("{{duration_countup}}", String(g_displaySettings.duration_countup));
   settingsPage.replace("{{fade_time}}", String(g_displaySettings.fade_time));
   if (g_displaySettings.countdown_target > 0) {
     char dt_buffer[20];
@@ -762,6 +797,7 @@ void handleSaveSettings( void )
   if (apserver.arg("custom_message_cb") == "1") g_displaySettings.flags |= (1 << 4);
   if (apserver.arg("show_seconds") == "1") g_displaySettings.flags |= (1 << 5);
   if (apserver.arg("countdown") == "1") g_displaySettings.flags |= (1 << 6);
+  if (apserver.arg("countup") == "1") g_displaySettings.flags |= (1 << 7);
   Serial.print("  flags: "); Serial.println(g_displaySettings.flags, BIN);
 
   g_displaySettings.duration_time = apserver.arg("duration_time").toInt();
@@ -779,6 +815,9 @@ void handleSaveSettings( void )
   g_displaySettings.duration_countdown = apserver.arg("duration_countdown").toInt();
   if (g_displaySettings.duration_countdown < 5000) g_displaySettings.duration_countdown = 5000;
   Serial.print("  duration_countdown: "); Serial.println(g_displaySettings.duration_countdown);
+  g_displaySettings.duration_countup = apserver.arg("duration_countup").toInt();
+  if (g_displaySettings.duration_countup < 5000) g_displaySettings.duration_countup = 5000;
+  Serial.print("  duration_countup: "); Serial.println(g_displaySettings.duration_countup);
   g_displaySettings.fade_time = apserver.arg("fade_time").toInt();
   if (g_displaySettings.fade_time < 200) g_displaySettings.fade_time = 200;
   Serial.print("  fade_time: "); Serial.println(g_displaySettings.fade_time);
@@ -817,6 +856,7 @@ void handleSaveSettings( void )
   g_dispState[(uint8_t)Values::curDate] = (g_displaySettings.flags & (1 << 2)) != 0;
   g_dispState[(uint8_t)Values::customMessage] = (g_displaySettings.flags & (1 << 4)) != 0;
   g_dispState[(uint8_t)Values::countdown] = (g_displaySettings.flags & (1 << 6)) != 0;
+  g_dispState[(uint8_t)Values::countUp] = (g_displaySettings.flags & (1 << 7)) != 0;
   
   Serial.println("g_dispState updated:");
   Serial.print("  Time: "); Serial.println(g_dispState[0]);
@@ -835,6 +875,7 @@ void initializeDefaultDisplaySettings() {
   g_displaySettings.duration_date = 5000;
   g_displaySettings.duration_custom_message = 5000;
   g_displaySettings.duration_countdown = 5000;
+  g_displaySettings.duration_countup = 5000;
   g_displaySettings.countdown_target = 5000;
   g_displaySettings.fade_time = 200;
   g_displaySettings.scroll_speed = E_SCROLL_SPEED_MEDIUM;
@@ -911,6 +952,40 @@ void handleInputPassword( void )
   else {
     handleNotFound();
   }
+}
+
+void handleStartTimer() {
+  if (!g_countup_running) {
+    g_countup_start_time = millis() - g_countup_elapsed_time;
+    g_countup_running = true;
+  }
+  apserver.send(200, "text/plain", "Timer started");
+}
+
+void handleStopTimer() {
+  if (g_countup_running) {
+    g_countup_elapsed_time = millis() - g_countup_start_time;
+    g_countup_running = false;
+  }
+  apserver.send(200, "text/plain", "Timer stopped");
+}
+
+void handleResetTimer() {
+  g_countup_start_time = 0;
+  g_countup_elapsed_time = 0;
+  g_countup_running = false;
+  apserver.send(200, "text/plain", "Timer reset");
+}
+
+void handleGetTimer() {
+  unsigned long current_time = 0;
+  if (g_countup_running) {
+    current_time = millis() - g_countup_start_time;
+  } else {
+    current_time = g_countup_elapsed_time;
+  }
+  String json = "{\"time\": " + String(current_time) + ", \"running\": " + String(g_countup_running) + "}";
+  apserver.send(200, "application/json", json);
 }
 
 void handleSelectNetwork( void )
